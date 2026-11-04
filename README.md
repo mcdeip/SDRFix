@@ -54,9 +54,10 @@ screen. SDRFix uses it to turn Windows' sRGB decode back into a pure power curve
 - **Switched automatically.** Whenever the brightness changes, from the slider, a shortcut or
   the tray menu, SDRFix sets Windows' SDR brightness *and* makes the matching profile the
   display's default. They never get out of step.
-- **Only SDR shadows change.** The correction is strongest near black. It fades out smoothly
-  towards SDR white, and everything brighter than SDR white passes through unchanged, so HDR
-  highlights stay as they are.
+- **Only the range below SDR white changes.** The correction is strongest near black, fades out
+  smoothly towards SDR white, and leaves everything brighter than SDR white unchanged. Windows
+  applies it to everything on screen, so the shadows of HDR games and films get it too. One
+  shortcut switches to a plain [HDR content profile](#hdr-content-profile) for those.
 - **The proven curve.** The lookup tables match the "Pure Power" profiles from
   [ColorControl](https://github.com/Maassoft/ColorControl) value for value. All 1024 entries
   were checked against ColorControl's profiles for the same display. The profiles are also
@@ -67,17 +68,28 @@ screen. SDRFix uses it to turn Windows' sRGB decode back into a pure power curve
 
 ## Compared with other fixes
 
-| Approach | Works everywhere | Follows the brightness slider | Leaves HDR content alone | Catch |
-|---|:---:|:---:|:---:|---|
-| **SDRFix** | ✅ | ✅ | ✅ | Needs HDR on (that's the point) |
-| A single hand-made MHC2 profile (ColorControl, dantmnf's tools) | ✅ | ❌ | ✅ | Correct at one SDR brightness only. Change the slider and you have to make and apply a new profile. |
-| Do nothing | ✅ | n/a | ✅ | Raised blacks, washed-out shadows |
-| Per-game shaders and injectors (ReShade, Special K) | ❌ | Manual | Depends | Set up per game, the injection can trip anti-cheat, and it doesn't help the desktop or video |
-| SDR-to-HDR conversion (Windows Auto HDR, NVIDIA RTX HDR) | ❌ | n/a | n/a | Games (and some video) only. It *expands* SDR into HDR, which changes the look instead of showing it as made, and RTX HDR costs GPU time. |
-| Turn HDR off for SDR content | ✅ | n/a | n/a | No HDR at all while it's off, and switching blanks the screen for a moment |
+There are two common system-wide fixes. One is a **single gamma profile** installed once: a
+generic download such as
+[win11hdr-srgb-to-gamma2.2-icm](https://github.com/dylanraga/win11hdr-srgb-to-gamma2.2-icm),
+or one made for your display with ColorControl. The other is a **DWM hook** such as
+[dwm_lut](https://github.com/ledoge/dwm_lut), which injects into `dwm.exe` and runs a 3D LUT
+over the desktop.
 
-SDRFix takes the most accurate approach, a display-pipeline MHC2 correction, and fixes its one
-weakness: a single profile is only right at one brightness level.
+| | SDRFix | Single gamma profile | DWM hook with a 3D LUT |
+|---|---|---|---|
+| **How it's applied** | Windows' own MHC2 color profiles | Windows' own MHC2 color profiles | Code injected into `dwm.exe`, hooking its rendering |
+| **Matches your SDR brightness** | Every slider step from 0 to 100, switched automatically | Right at one level. The generic set covers 100, 200, 300 and 400 nits, so you pick the closest and swap it when you move the slider. | Right at the level the LUT was built for. Build and load a new LUT when you change it. |
+| **HDR games and video** | Shadows below SDR white are corrected too. One shortcut switches to a plain HDR profile and back. | Shadows below SDR white are corrected too. Switch profiles by hand in Color Management. | The LUT runs on the final output, so HDR content goes through it too. Disable it by hand. |
+| **Gamma** | 2.2 or 2.4, switch any time | Whatever the profile was made for (the generic set is 2.2) | Whatever the LUT was made for |
+| **Performance** | No cost. Windows applies the profile in its display pipeline. | No cost (same mechanism) | Turns off DirectFlip and MPO on that monitor so every window goes through DWM. Exclusive full-screen games aren't covered. |
+| **Windows updates** | Uses documented Windows features | Uses documented Windows features | The hook depends on DWM internals. The original tool stopped working with Windows 11 22H2 and now lives on in a fork. |
+| **Full color calibration** | No. It corrects gamma only. | No. It corrects gamma only. | Yes. A measured 3D LUT can also correct gamut and grayscale. |
+
+SDRFix uses the same mechanism as a single gamma profile. Nothing is patched or injected, and
+there's no performance cost. What it fixes is that mechanism's weakness: a single profile is
+only right at one brightness level, and switching profiles by hand is a chore. It also makes the
+profiles for your display, using its primaries and peak brightness, rather than generic ones. If
+you need full measured calibration, a 3D LUT does more than SDRFix can.
 
 ---
 
@@ -109,7 +121,10 @@ If you never switch, hide the toggle with *Gamma → Show toggle in slider* in t
 
 ### HDR content profile
 
-For HDR games and HDR video you don't want an SDR gamma correction. Turn on **HDR content** in
+The gamma profiles change everything below SDR white, HDR content included, so an HDR game's
+shadows would come out darker than they were graded. At 200-nit SDR white with gamma 2.2, a
+0.80-nit shadow is shown at about 0.29 nits. Mid-tones move by 1–2%, and nothing at or above
+200 nits changes. For HDR games and HDR video you don't want that. Turn on **HDR content** in
 the slider (or press **Space** in the slider, or use the shortcut) to switch to a plain HDR
 profile with no gamma curve. It only declares your display's brightness range, from 0 to the
 peak you entered in setup. The brightness slider still works while it's on. Turn it off again
