@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -108,6 +109,34 @@ namespace SdrBrightness
             {
                 using (var key = Registry.CurrentUser.CreateSubKey(Key))
                     key.SetValue("HotkeyStep", value, RegistryValueKind.DWord);
+            }
+        }
+
+        public static string DefaultScreenshotFolder
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SDRFix Screenshots"); }
+        }
+
+        // Where screenshots are saved as PNG files. The default isn't stored, so it follows Documents if that moves.
+        public static string ScreenshotFolder
+        {
+            get
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(Key))
+                {
+                    string value = key == null ? null : key.GetValue("ScreenshotFolder") as string;
+                    return string.IsNullOrEmpty(value) ? DefaultScreenshotFolder : value;
+                }
+            }
+            set
+            {
+                using (var key = Registry.CurrentUser.CreateSubKey(Key))
+                {
+                    if (string.IsNullOrEmpty(value) || string.Equals(value.TrimEnd('\\'), DefaultScreenshotFolder, StringComparison.OrdinalIgnoreCase))
+                        key.DeleteValue("ScreenshotFolder", false);
+                    else
+                        key.SetValue("ScreenshotFolder", value);
+                }
             }
         }
 

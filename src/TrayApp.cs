@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -272,12 +273,20 @@ namespace SdrBrightness
                 osd.ShowText(Theme.GlyphWarning, "Nothing on screen to capture");
                 return;
             }
-            bool toneMapped;
+            bool toneMapped, copied = true, saved = true;
             using (Bitmap bitmap = ScreenCapture.Render(images, area, out toneMapped))
             using (var png = new MemoryStream())
             {
-                // A bitmap for every app, plus PNG for the ones that prefer it.
                 bitmap.Save(png, ImageFormat.Png);
+                try
+                {
+                    SavePng(png);
+                }
+                catch (Exception)
+                {
+                    saved = false; // a missing drive or a folder we can't write to; the clipboard still gets it
+                }
+                // A bitmap for every app, plus PNG for the ones that prefer it.
                 png.Position = 0;
                 var data = new DataObject();
                 data.SetData(DataFormats.Bitmap, true, bitmap);
@@ -288,11 +297,36 @@ namespace SdrBrightness
                 }
                 catch (ExternalException)
                 {
-                    osd.ShowText(Theme.GlyphWarning, "Couldn't open the clipboard · try again");
-                    return;
+                    copied = false;
                 }
             }
-            osd.ShowText(Theme.GlyphCamera, what + (toneMapped ? " copied · HDR tone-mapped" : " copied to clipboard"));
+            if (copied && saved)
+                osd.ShowText(Theme.GlyphCamera, what + " copied and saved" + (toneMapped ? " · HDR tone-mapped" : ""));
+            else if (copied)
+                osd.ShowText(Theme.GlyphWarning, what + " copied · couldn't save it to the screenshot folder");
+            else if (saved)
+                osd.ShowText(Theme.GlyphWarning, what + " saved · couldn't open the clipboard");
+            else
+                osd.ShowText(Theme.GlyphWarning, "Couldn't copy or save the screenshot");
+        }
+
+        // "Screenshot 2026-11-04 142233.png", numbered when several land in the same second.
+        static void SavePng(MemoryStream png)
+        {
+            string folder = Settings.ScreenshotFolder;
+            Directory.CreateDirectory(folder);
+            string stem = "Screenshot " + DateTime.Now.ToString("yyyy-MM-dd HHmmss", CultureInfo.InvariantCulture);
+            string path = Path.Combine(folder, stem + ".png");
+            for (int n = 2; File.Exists(path); n++)
+                path = Path.Combine(folder, stem + " (" + n + ").png");
+            using (var file = new FileStream(path, FileMode.CreateNew))
+                png.WriteTo(file);
+        }
+
+        void OpenScreenshotFolder()
+        {
+            if (!FolderPicker.Open(Settings.ScreenshotFolder))
+                osd.ShowText(Theme.GlyphWarning, "Couldn't open the screenshot folder");
         }
 
         // ---- Windows ----
@@ -500,6 +534,7 @@ namespace SdrBrightness
             menu.MenuItems.Add("Set up gamma profiles…", delegate { ShowSetup(false); });
             menu.MenuItems.Add("Keyboard shortcuts…" + (hotkeys.Failed.Count > 0 ? "  (" + hotkeys.Failed.Count + " unavailable)" : ""),
                 delegate { ShowShortcuts(); });
+            menu.MenuItems.Add("Open screenshot folder", delegate { OpenScreenshotFolder(); });
             menu.MenuItems.Add("Display settings…", delegate { Process.Start("ms-settings:display"); });
             menu.MenuItems.Add(new MenuItem("Start with Windows", delegate { Settings.StartWithWindows = !Settings.StartWithWindows; })
             {

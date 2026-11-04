@@ -168,7 +168,7 @@ keys. **Backspace** clears a shortcut. Keys that type something (letters, digits
 least one modifier, but function keys and media keys can be used alone. **Step per press** sets
 how far each press moves the slider: 5 (one profile step, the default), 10, 15, 20 or 25.
 
-<p align="center"><img src="docs/images/shortcuts.png" width="482" alt="Keyboard shortcuts window with the brightness and screenshot shortcuts and the step-per-press picker"></p>
+<p align="center"><img src="docs/images/shortcuts.png" width="482" alt="Keyboard shortcuts window with the brightness and screenshot shortcuts, the step-per-press picker and the screenshot folder"></p>
 
 If another app already owns a shortcut, Windows won't give it to SDRFix. The tray menu then shows
 *Keyboard shortcuts… (1 unavailable)* and the window tells you which one, so you can pick
@@ -212,8 +212,10 @@ and re-encodes with the same sRGB curve Windows decoded it with:
 | `Ctrl` + `Shift` + `3` | Every display, as one image |
 | `Ctrl` + `Shift` + `4` | A region: drag on the frozen screen. **Esc** or right-click cancels. |
 
-The image goes to the clipboard as both a bitmap and a PNG, ready to paste. The mouse pointer
-isn't included. These shortcuts work with HDR off too, as ordinary screenshots. Rotated (portrait)
+The image goes to the clipboard as both a bitmap and a PNG, ready to paste. It's also saved as
+a PNG file, named like `Screenshot 2026-11-04 142233.png`, in `Documents\SDRFix Screenshots`.
+To save somewhere else, open **Keyboard shortcuts…** and choose **Change…** next to *Save to*.
+**Open screenshot folder** in the tray menu takes you there. The mouse pointer isn't included. These shortcuts work with HDR off too, as ordinary screenshots. Rotated (portrait)
 displays aren't supported yet.
 
 <p align="center"><img src="docs/images/region-picker.png" width="640" alt="Region picker: the frozen screen dimmed, with the selected area around the SDRFix slider at full brightness and a 474 × 316 size label"></p>
@@ -230,7 +232,8 @@ Right-click the tray icon:
 | **HDR content profile** | On/off, with its shortcut |
 | **Display** | Shown only with more than one display. Picks which one SDRFix controls, and marks displays with HDR off or without HDR. |
 | **Set up gamma profiles…** | Runs setup again |
-| **Keyboard shortcuts…** | Changes the shortcuts and the step per press |
+| **Keyboard shortcuts…** | Changes the shortcuts, the step per press and the screenshot folder |
+| **Open screenshot folder** | Opens the folder screenshots are saved to |
 | **Display settings…** | Opens Windows' display settings (turn HDR on there) |
 | **Start with Windows** | Starts SDRFix when you sign in |
 | **Exit** | Quits. The current brightness and profile stay as they are. |
@@ -275,6 +278,7 @@ The exe isn't code-signed, so SmartScreen may warn the first time you run it. Ch
 - **Profiles:** `C:\Windows\System32\spool\drivers\color\SdrBrightness-<display model>-<gamma>-<step>.icm`,
   plus `SdrBrightness-<display model>-HDR.icm`. Profiles are named per display model, so each
   display gets its own set.
+- **Screenshots:** `Documents\SDRFix Screenshots`, unless you choose another folder
 - **Settings:** `HKEY_CURRENT_USER\Software\SdrBrightness`
 - **Start with Windows:** the `SdrBrightness` value under
   `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`

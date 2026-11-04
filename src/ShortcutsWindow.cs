@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
+using System.IO;
 using System.Windows.Forms;
 
 namespace SdrBrightness
@@ -192,8 +193,8 @@ namespace SdrBrightness
     // Rebind the global shortcuts and pick how far one press moves the slider.
     sealed class ShortcutsWindow : Form
     {
-        const float WidthDip = 480, HeightDip = 624, Pad = 24, FirstRowDip = 112, RowDip = 54, FooterDip = 560;
-        const float SectionDip = FirstRowDip + 4 * RowDip + 6, ShotsDip = SectionDip + 34;
+        const float WidthDip = 480, HeightDip = 678, Pad = 24, FirstRowDip = 112, RowDip = 54, FooterDip = 614;
+        const float SectionDip = FirstRowDip + 4 * RowDip + 6, ShotsDip = SectionDip + 34, FolderDip = ShotsDip + 3 * RowDip;
         const TextFormatFlags Line = TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter;
 
         // One per HotkeyManager.Actions entry.
@@ -214,7 +215,8 @@ namespace SdrBrightness
         readonly Font titleFont, bodyFont, labelFont, smallFont, glyphFont, sectionFont;
         readonly Dictionary<HotkeyAction, HotkeyBox> boxes = new Dictionary<HotkeyAction, HotkeyBox>();
         readonly SegmentPicker stepPicker;
-        readonly FlatButton saveButton, cancelButton, defaultsButton;
+        readonly FlatButton saveButton, cancelButton, defaultsButton, openButton, changeButton;
+        string folder = Settings.ScreenshotFolder; // saved with the shortcuts
         string message = "";
         StatusKind messageKind;
 
@@ -276,6 +278,25 @@ namespace SdrBrightness
             };
             Controls.Add(stepPicker);
 
+            int folderY = S(FolderDip) + S(2);
+            changeButton = new FlatButton(theme, scale) { Text = "Change…", Font = bodyFont, BackColor = theme.Background };
+            changeButton.Bounds = new Rectangle(w - S(Pad - 2) - S(104), folderY, S(104), S(36));
+            openButton = new FlatButton(theme, scale) { Text = "Open", Font = bodyFont, BackColor = theme.Background };
+            openButton.Bounds = new Rectangle(changeButton.Left - S(4) - S(88), folderY, S(88), S(36));
+            changeButton.Click += delegate
+            {
+                string picked = FolderPicker.Pick(this, "Choose where to save screenshots", folder);
+                if (picked != null)
+                    SetFolder(picked);
+            };
+            openButton.Click += delegate
+            {
+                if (!FolderPicker.Open(folder))
+                    SetMessage("Couldn't open that folder", StatusKind.Error);
+            };
+            Controls.Add(openButton);
+            Controls.Add(changeButton);
+
             int footer = S(FooterDip), buttonH = S(36), buttonY = footer + (ClientSize.Height - footer - buttonH) / 2;
             cancelButton = new FlatButton(theme, scale) { Text = "Cancel", Font = bodyFont, BackColor = theme.Footer };
             cancelButton.Bounds = new Rectangle(w - S(Pad - 2) - S(104), buttonY, S(104), buttonH);
@@ -290,7 +311,7 @@ namespace SdrBrightness
                 foreach (HotkeyAction action in HotkeyManager.Actions)
                     boxes[action].Hotkey = Hotkey.Default(action);
                 stepPicker.Value = Settings.HotkeySteps[0].ToString(CultureInfo.InvariantCulture);
-                SetMessage("", StatusKind.Info);
+                SetFolder(Settings.DefaultScreenshotFolder);
             };
             Controls.Add(saveButton);
             Controls.Add(cancelButton);
@@ -343,6 +364,29 @@ namespace SdrBrightness
             Invalidate(new Rectangle(0, S(FooterDip - 30), ClientSize.Width, S(22)));
         }
 
+        void SetFolder(string path)
+        {
+            folder = path;
+            Invalidate(new Rectangle(0, S(FolderDip), ClientSize.Width, S(RowDip)));
+            SetMessage("", StatusKind.Info);
+        }
+
+        // "Documents\SDRFix Screenshots" rather than the whole path, for folders in the usual places.
+        static string FriendlyPath(string path)
+        {
+            foreach (var known in new[] { Environment.SpecialFolder.MyDocuments, Environment.SpecialFolder.MyPictures, Environment.SpecialFolder.Desktop })
+            {
+                string root = Environment.GetFolderPath(known).TrimEnd('\\');
+                if (root.Length == 0)
+                    continue;
+                if (path.Equals(root, StringComparison.OrdinalIgnoreCase))
+                    return Path.GetFileName(root);
+                if (path.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase))
+                    return Path.GetFileName(root) + path.Substring(root.Length);
+            }
+            return path;
+        }
+
         void Save()
         {
             var seen = new Dictionary<Hotkey, HotkeyAction>();
@@ -361,6 +405,7 @@ namespace SdrBrightness
             foreach (HotkeyAction action in HotkeyManager.Actions)
                 Settings.SetHotkey(action, boxes[action].Hotkey);
             Settings.HotkeyStep = int.Parse(stepPicker.Value, CultureInfo.InvariantCulture);
+            Settings.ScreenshotFolder = folder;
 
             manager.Pause(false);
             if (manager.Failed.Count == 0)
@@ -391,8 +436,9 @@ namespace SdrBrightness
             int section = S(SectionDip);
             TextRenderer.DrawText(g, "Screenshots", sectionFont, new Rectangle(x, section, textW, S(20)), theme.Text, Line);
             int titleW = TextRenderer.MeasureText(g, "Screenshots", sectionFont, Size.Empty, Line).Width;
-            TextRenderer.DrawText(g, "  ·  copied to the clipboard, as they'd look in SDR", smallFont,
+            TextRenderer.DrawText(g, "  ·  copied and saved, as they'd look in SDR", smallFont,
                 new Rectangle(x + titleW, section, textW - titleW, S(20)), theme.Secondary, Line | TextFormatFlags.EndEllipsis);
+            DrawRow(g, S(FolderDip), "Save to", FriendlyPath(folder), labelW, TextFormatFlags.PathEllipsis);
 
             if (!string.IsNullOrEmpty(message))
             {
@@ -412,11 +458,11 @@ namespace SdrBrightness
                 g.DrawLine(divider, 0, footer, w, footer);
         }
 
-        void DrawRow(Graphics g, int top, string label, string hint, int width)
+        void DrawRow(Graphics g, int top, string label, string hint, int width, TextFormatFlags ellipsis = TextFormatFlags.EndEllipsis)
         {
             TextRenderer.DrawText(g, label, labelFont, new Rectangle(S(Pad), top + S(1), width, S(20)), theme.Text, Line | TextFormatFlags.EndEllipsis);
             TextRenderer.DrawText(g, hint, smallFont, new Rectangle(S(Pad), top + S(21), width, S(18)), theme.Secondary,
-                Line | TextFormatFlags.EndEllipsis);
+                Line | ellipsis);
         }
 
         protected override void Dispose(bool disposing)
