@@ -9,6 +9,7 @@ namespace SdrBrightness
     {
         public string Name;
         public string DevicePath;
+        public string GdiName; // \\.\DISPLAY1, as DXGI names its outputs
         public LUID AdapterId;
         public uint TargetId;
         public uint SourceId;
@@ -89,6 +90,12 @@ namespace SdrBrightness
                     display.Name = "Display " + (list.Count + 1);
                 if (string.IsNullOrEmpty(display.DevicePath))
                     display.DevicePath = display.Name;
+
+                var source = new Native.DISPLAYCONFIG_SOURCE_DEVICE_NAME();
+                source.header = display.Header(Native.DEVICE_INFO_GET_SOURCE_NAME, Marshal.SizeOf(source));
+                source.header.id = display.SourceId;
+                if (Native.DisplayConfigGetDeviceInfo(ref source) == 0)
+                    display.GdiName = source.viewGdiDeviceName;
 
                 display.ReadColorState();
                 list.Add(display);

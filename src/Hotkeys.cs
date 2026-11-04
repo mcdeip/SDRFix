@@ -5,7 +5,7 @@ using System.Windows.Forms;
 
 namespace SdrBrightness
 {
-    enum HotkeyAction { BrightnessDown = 1, BrightnessUp = 2, ToggleHdr = 3 }
+    enum HotkeyAction { BrightnessDown = 1, BrightnessUp = 2, ToggleHdr = 3, ScreenshotWindow = 4, ScreenshotDesktop = 5, ScreenshotRegion = 6 }
 
     // A global shortcut: RegisterHotKey's MOD_* flags plus a virtual-key code.
     struct Hotkey
@@ -45,6 +45,12 @@ namespace SdrBrightness
                     return new Hotkey(Alt | Shift, Keys.F1);
                 case HotkeyAction.BrightnessUp:
                     return new Hotkey(Alt | Shift, Keys.F2);
+                case HotkeyAction.ScreenshotWindow:
+                    return new Hotkey(Control | Shift, Keys.D2);
+                case HotkeyAction.ScreenshotDesktop:
+                    return new Hotkey(Control | Shift, Keys.D3);
+                case HotkeyAction.ScreenshotRegion:
+                    return new Hotkey(Control | Shift, Keys.D4);
                 default:
                     return new Hotkey(Alt | Shift, Keys.F3);
             }
@@ -120,7 +126,11 @@ namespace SdrBrightness
         const int WM_HOTKEY = 0x0312;
         const uint MOD_NOREPEAT = 0x4000;
 
-        public static readonly HotkeyAction[] Actions = { HotkeyAction.BrightnessDown, HotkeyAction.BrightnessUp, HotkeyAction.ToggleHdr };
+        public static readonly HotkeyAction[] Actions =
+        {
+            HotkeyAction.BrightnessDown, HotkeyAction.BrightnessUp, HotkeyAction.ToggleHdr,
+            HotkeyAction.ScreenshotWindow, HotkeyAction.ScreenshotDesktop, HotkeyAction.ScreenshotRegion,
+        };
 
         readonly List<HotkeyAction> registered = new List<HotkeyAction>();
         readonly List<HotkeyAction> failed = new List<HotkeyAction>();
@@ -151,8 +161,9 @@ namespace SdrBrightness
                 Hotkey hotkey = Settings.GetHotkey(action);
                 if (hotkey.IsEmpty)
                     continue;
-                // Holding a brightness shortcut repeats it; the HDR toggle fires once per press.
-                uint modifiers = (uint)hotkey.Modifiers | (action == HotkeyAction.ToggleHdr ? MOD_NOREPEAT : 0);
+                // Holding a brightness shortcut repeats it; the others fire once per press.
+                bool repeats = action == HotkeyAction.BrightnessDown || action == HotkeyAction.BrightnessUp;
+                uint modifiers = (uint)hotkey.Modifiers | (repeats ? 0 : MOD_NOREPEAT);
                 if (Native.RegisterHotKey(Handle, (int)action, modifiers, (uint)hotkey.Key))
                     registered.Add(action);
                 else

@@ -2,7 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -30,6 +34,7 @@ namespace SdrBrightness
         IntPtr iconHandle;
         SetupWindow setup;
         ShortcutsWindow shortcuts;
+        RegionPicker picker;
 
         public TrayApp()
         {
@@ -147,6 +152,11 @@ namespace SdrBrightness
 
         void OnHotkey(HotkeyAction action)
         {
+            if (action == HotkeyAction.ScreenshotWindow || action == HotkeyAction.ScreenshotDesktop || action == HotkeyAction.ScreenshotRegion)
+            {
+                Screenshot(action); // with HDR off too
+                return;
+            }
             if (display == null || !display.HdrOn)
                 RefreshState();
             if (display == null || !display.HdrOn)
@@ -197,6 +207,92 @@ namespace SdrBrightness
             int value = hotkeyValue;
             hotkeyValue = -1;
             Commit(value, hdrWanted);
+        }
+
+        // ---- Screenshots ----
+
+        void Screenshot(HotkeyAction action)
+        {
+            if (picker != null)
+                return; // already picking a region
+            if (osd.Visible)
+            {
+                osd.Hide(); // keep the indicator out of the picture
+                Native.DwmFlush();
+                Native.DwmFlush();
+            }
+            try
+            {
+                using (Native.PerMonitorDpi())
+                {
+                    if (action == HotkeyAction.ScreenshotRegion)
+                    {
+                        List<DesktopImage> all = ScreenCapture.Capture(null);
+                        picker = new RegionPicker(all);
+                        picker.Picked += area => CopyScreenshot(all, area, "Region");
+                        picker.Closed += delegate { picker = null; };
+                        picker.Show();
+                        return;
+                    }
+                    Rectangle? target = action == HotkeyAction.ScreenshotWindow ? ActiveWindowBounds() : (Rectangle?)null;
+                    List<DesktopImage> images = ScreenCapture.Capture(target);
+                    Rectangle shot = ScreenCapture.Union(images);
+                    if (target.HasValue)
+                        shot = Rectangle.Intersect(shot, target.Value);
+                    CopyScreenshot(images, shot, action == HotkeyAction.ScreenshotWindow ? "Window" : "Desktop");
+                }
+            }
+            catch (Exception ex)
+            {
+                picker = null;
+                osd.ShowText(Theme.GlyphWarning, "Screenshot failed · " + ex.Message);
+            }
+        }
+
+        // The foreground window's visible frame, or the display under the pointer for the desktop and taskbar.
+        static Rectangle ActiveWindowBounds()
+        {
+            IntPtr hwnd = Native.GetForegroundWindow();
+            var name = new StringBuilder(64);
+            if (hwnd != IntPtr.Zero)
+                Native.GetClassName(hwnd, name, name.Capacity);
+            string kind = name.ToString();
+            Native.RECT r;
+            if (hwnd == IntPtr.Zero || Native.IsIconic(hwnd) || kind == "Progman" || kind == "WorkerW" ||
+                kind == "Shell_TrayWnd" || kind == "Shell_SecondaryTrayWnd" ||
+                Native.DwmGetWindowAttribute(hwnd, Native.DWMWA_EXTENDED_FRAME_BOUNDS, out r, Marshal.SizeOf(typeof(Native.RECT))) != 0)
+                return Screen.FromPoint(Cursor.Position).Bounds;
+            return Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
+        }
+
+        void CopyScreenshot(IList<DesktopImage> images, Rectangle area, string what)
+        {
+            if (area.Width <= 0 || area.Height <= 0)
+            {
+                osd.ShowText(Theme.GlyphWarning, "Nothing on screen to capture");
+                return;
+            }
+            bool toneMapped;
+            using (Bitmap bitmap = ScreenCapture.Render(images, area, out toneMapped))
+            using (var png = new MemoryStream())
+            {
+                // A bitmap for every app, plus PNG for the ones that prefer it.
+                bitmap.Save(png, ImageFormat.Png);
+                png.Position = 0;
+                var data = new DataObject();
+                data.SetData(DataFormats.Bitmap, true, bitmap);
+                data.SetData("PNG", false, png);
+                try
+                {
+                    Clipboard.SetDataObject(data, true, 5, 100);
+                }
+                catch (ExternalException)
+                {
+                    osd.ShowText(Theme.GlyphWarning, "Couldn't open the clipboard · try again");
+                    return;
+                }
+            }
+            osd.ShowText(Theme.GlyphCamera, what + (toneMapped ? " copied · HDR tone-mapped" : " copied to clipboard"));
         }
 
         // ---- Windows ----

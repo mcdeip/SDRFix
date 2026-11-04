@@ -78,6 +78,8 @@ namespace SdrBrightness
             UpdateScale();
             Rectangle work = Screen.FromPoint(Cursor.Position).WorkingArea;
             int w = S(WidthDip), h = S(HeightDip);
+            if (value < 0) // messages get as wide as they need, within reason
+                w = Math.Min(S(560), Math.Max(w, TextRenderer.MeasureText(text, textFont).Width + S(2 * Pad + 30)));
             Bounds = new Rectangle(work.Left + (work.Width - w) / 2, work.Bottom - h - S(24), w, h);
             if (!Visible)
                 Show();

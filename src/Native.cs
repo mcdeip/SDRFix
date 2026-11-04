@@ -17,6 +17,7 @@ namespace SdrBrightness
         public const uint QDC_ONLY_ACTIVE_PATHS = 2;
         public const int ERROR_INSUFFICIENT_BUFFER = 122;
 
+        public const uint DEVICE_INFO_GET_SOURCE_NAME = 1;
         public const uint DEVICE_INFO_GET_TARGET_NAME = 2;
         public const uint DEVICE_INFO_GET_ADVANCED_COLOR_INFO = 9;
         public const uint DEVICE_INFO_GET_SDR_WHITE_LEVEL = 11;
@@ -96,6 +97,14 @@ namespace SdrBrightness
             public string monitorDevicePath;
         }
 
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct DISPLAYCONFIG_SOURCE_DEVICE_NAME
+        {
+            public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string viewGdiDeviceName; // \\.\DISPLAY1
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         public struct DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO
         {
@@ -139,6 +148,9 @@ namespace SdrBrightness
 
         [DllImport("user32.dll")]
         public static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_TARGET_DEVICE_NAME requestPacket);
+
+        [DllImport("user32.dll")]
+        public static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_SOURCE_DEVICE_NAME requestPacket);
 
         [DllImport("user32.dll")]
         public static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO requestPacket);
@@ -187,6 +199,66 @@ namespace SdrBrightness
 
         [DllImport("dwmapi.dll")]
         public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left, Top, Right, Bottom;
+        }
+
+        public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+
+        // The visible frame in physical pixels, without the invisible resize borders.
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out RECT value, int size);
+
+        // Waits for the next desktop composition.
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmFlush();
+
+        [DllImport("user32.dll")]
+        public static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder name, int size);
+
+        [DllImport("user32.dll")]
+        public static extern uint GetDpiForWindow(IntPtr hWnd);
+
+        static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new IntPtr(-4);
+
+        [DllImport("user32.dll")]
+        static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+
+        // Switches this thread to per-monitor DPI awareness until disposed, so window and desktop
+        // coordinates are physical pixels on every display. Windows created meanwhile keep it.
+        public static IDisposable PerMonitorDpi()
+        {
+            try
+            {
+                return new DpiScope(SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2));
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return new DpiScope(IntPtr.Zero); // before Windows 10 1607
+            }
+        }
+
+        sealed class DpiScope : IDisposable
+        {
+            readonly IntPtr previous;
+
+            public DpiScope(IntPtr previous)
+            {
+                this.previous = previous;
+            }
+
+            public void Dispose()
+            {
+                if (previous != IntPtr.Zero)
+                    SetThreadDpiAwarenessContext(previous);
+            }
+        }
 
         [DllImport("user32.dll")]
         public static extern bool SetForegroundWindow(IntPtr hWnd);

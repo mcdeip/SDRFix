@@ -192,15 +192,26 @@ namespace SdrBrightness
     // Rebind the global shortcuts and pick how far one press moves the slider.
     sealed class ShortcutsWindow : Form
     {
-        const float WidthDip = 480, HeightDip = 420, Pad = 24, FirstRowDip = 112, RowDip = 54, FooterDip = 356;
+        const float WidthDip = 480, HeightDip = 624, Pad = 24, FirstRowDip = 112, RowDip = 54, FooterDip = 560;
+        const float SectionDip = FirstRowDip + 4 * RowDip + 6, ShotsDip = SectionDip + 34;
         const TextFormatFlags Line = TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter;
 
-        static readonly string[] Labels = { "Brightness down", "Brightness up", "HDR content profile" };
+        // One per HotkeyManager.Actions entry.
+        static readonly string[] Labels = { "Brightness down", "Brightness up", "HDR content profile", "Active window", "Whole desktop", "Region" };
+        static readonly string[] Hints =
+        {
+            "Moves the slider down one step",
+            "Moves the slider up one step",
+            "Turns the HDR profile on or off",
+            "The window in front",
+            "Every display",
+            "Drag to pick an area",
+        };
 
         readonly HotkeyManager manager;
         readonly Theme theme = Theme.Current();
         readonly float scale;
-        readonly Font titleFont, bodyFont, labelFont, smallFont, glyphFont;
+        readonly Font titleFont, bodyFont, labelFont, smallFont, glyphFont, sectionFont;
         readonly Dictionary<HotkeyAction, HotkeyBox> boxes = new Dictionary<HotkeyAction, HotkeyBox>();
         readonly SegmentPicker stepPicker;
         readonly FlatButton saveButton, cancelButton, defaultsButton;
@@ -236,6 +247,7 @@ namespace SdrBrightness
             labelFont = new Font("Segoe UI", 14 * scale, GraphicsUnit.Pixel);
             smallFont = new Font("Segoe UI", 12 * scale, GraphicsUnit.Pixel);
             glyphFont = new Font(Theme.IconFont, 12 * scale, GraphicsUnit.Pixel);
+            sectionFont = new Font("Segoe UI Semibold", 14 * scale, GraphicsUnit.Pixel);
 
             int w = ClientSize.Width;
             for (int i = 0; i < HotkeyManager.Actions.Length; i++)
@@ -246,7 +258,7 @@ namespace SdrBrightness
                     Font = labelFont,
                     BackColor = theme.Background,
                     Hotkey = Settings.GetHotkey(action),
-                    Bounds = new Rectangle(w - S(Pad - 2) - S(196), S(FirstRowDip + i * RowDip) + S(2), S(196), S(36)),
+                    Bounds = new Rectangle(w - S(Pad - 2) - S(196), S(ActionTop(i)) + S(2), S(196), S(36)),
                 };
                 box.Changed += delegate { SetMessage("", StatusKind.Info); };
                 box.Rejected += delegate { SetMessage("Add Ctrl, Alt, Shift or Win to that key", StatusKind.Error); };
@@ -310,6 +322,12 @@ namespace SdrBrightness
             return (int)Math.Round(dip * scale);
         }
 
+        // The brightness and HDR rows come first, then step per press, then the screenshot section.
+        static float ActionTop(int index)
+        {
+            return index < 3 ? FirstRowDip + index * RowDip : ShotsDip + (index - 3) * RowDip;
+        }
+
         static string TakenMessage(IList<HotkeyAction> actions)
         {
             var names = new List<string>();
@@ -365,22 +383,16 @@ namespace SdrBrightness
                 "These work in any app, including full-screen games. Click a shortcut and press new keys; Backspace clears it.",
                 bodyFont, new Rectangle(x, S(58), textW, S(40)), theme.Secondary, TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
 
-            string[] hints =
-            {
-                "Moves the slider down one step",
-                "Moves the slider up one step",
-                "Turns the HDR profile on or off",
-                "Slider units · profiles exist every 5",
-            };
             int labelW = textW - S(220);
-            for (int i = 0; i < 4; i++)
-            {
-                int top = S(FirstRowDip + i * RowDip);
-                TextRenderer.DrawText(g, i < 3 ? Labels[i] : "Step per press", labelFont, new Rectangle(x, top + S(1), labelW, S(20)),
-                    theme.Text, Line | TextFormatFlags.EndEllipsis);
-                TextRenderer.DrawText(g, hints[i], smallFont, new Rectangle(x, top + S(21), labelW, S(18)), theme.Secondary,
-                    Line | TextFormatFlags.EndEllipsis);
-            }
+            for (int i = 0; i < Labels.Length; i++)
+                DrawRow(g, S(ActionTop(i)), Labels[i], Hints[i], labelW);
+            DrawRow(g, S(FirstRowDip + 3 * RowDip), "Step per press", "Slider units · profiles exist every 5", labelW);
+
+            int section = S(SectionDip);
+            TextRenderer.DrawText(g, "Screenshots", sectionFont, new Rectangle(x, section, textW, S(20)), theme.Text, Line);
+            int titleW = TextRenderer.MeasureText(g, "Screenshots", sectionFont, Size.Empty, Line).Width;
+            TextRenderer.DrawText(g, "  ·  copied to the clipboard, as they'd look in SDR", smallFont,
+                new Rectangle(x + titleW, section, textW - titleW, S(20)), theme.Secondary, Line | TextFormatFlags.EndEllipsis);
 
             if (!string.IsNullOrEmpty(message))
             {
@@ -400,10 +412,17 @@ namespace SdrBrightness
                 g.DrawLine(divider, 0, footer, w, footer);
         }
 
+        void DrawRow(Graphics g, int top, string label, string hint, int width)
+        {
+            TextRenderer.DrawText(g, label, labelFont, new Rectangle(S(Pad), top + S(1), width, S(20)), theme.Text, Line | TextFormatFlags.EndEllipsis);
+            TextRenderer.DrawText(g, hint, smallFont, new Rectangle(S(Pad), top + S(21), width, S(18)), theme.Secondary,
+                Line | TextFormatFlags.EndEllipsis);
+        }
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)
-                foreach (var font in new[] { titleFont, bodyFont, labelFont, smallFont, glyphFont })
+                foreach (var font in new[] { titleFont, bodyFont, labelFont, smallFont, glyphFont, sectionFont })
                     font.Dispose();
             base.Dispose(disposing);
         }

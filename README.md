@@ -5,7 +5,8 @@
 When HDR is on, Windows makes SDR apps, the desktop, videos and games look washed out: blacks
 turn gray and shadows lose depth. SDRFix is a small tray app that fixes this. It gives Windows
 a matching gamma-correction profile for every position of the *SDR content brightness* slider
-and switches between them for you.
+and switches between them for you. It also takes [screenshots](#screenshots) that come out
+right with HDR on.
 
 <p align="center"><img src="docs/images/slider.png" width="360" alt="The SDRFix slider: SDR content brightness at 30 (200 nits), gamma 2.2 selected, HDR content profile off"></p>
 
@@ -158,17 +159,23 @@ in any app:
 | Brightness down | `Alt` + `Shift` + `F1` |
 | Brightness up | `Alt` + `Shift` + `F2` |
 | HDR content profile on/off | `Alt` + `Shift` + `F3` |
+| [Screenshot](#screenshots) of the active window | `Ctrl` + `Shift` + `2` |
+| Screenshot of the whole desktop | `Ctrl` + `Shift` + `3` |
+| Screenshot of a region | `Ctrl` + `Shift` + `4` |
 
 To change them, open **Keyboard shortcuts…** in the tray menu, click a shortcut and press the new
 keys. **Backspace** clears a shortcut. Keys that type something (letters, digits, arrows) need at
 least one modifier, but function keys and media keys can be used alone. **Step per press** sets
 how far each press moves the slider: 5 (one profile step, the default), 10, 15, 20 or 25.
 
-<p align="center"><img src="docs/images/shortcuts.png" width="482" alt="Keyboard shortcuts window with the three shortcuts and the step-per-press picker"></p>
+<p align="center"><img src="docs/images/shortcuts.png" width="482" alt="Keyboard shortcuts window with the brightness and screenshot shortcuts and the step-per-press picker"></p>
 
 If another app already owns a shortcut, Windows won't give it to SDRFix. The tray menu then shows
 *Keyboard shortcuts… (1 unavailable)* and the window tells you which one, so you can pick
 another. SDRFix tries again each time you open the tray menu.
+
+Global shortcuts also take priority over apps' own. For example, while SDRFix holds
+`Ctrl` + `Shift` + `2`–`4`, Excel's matching number-format shortcuts don't reach Excel.
 
 ### On-screen indicator
 
@@ -177,6 +184,39 @@ flyout. It never takes focus and lets clicks pass through, so your game keeps ru
 undisturbed. Quick repeated presses are combined, so the profile is applied once when you stop.
 
 <p align="center"><img src="docs/images/indicator.png" width="272" alt="Indicator showing SDR brightness 55, 300 nits"></p>
+
+### Screenshots
+
+With HDR on, Windows composes the desktop in 16-bit floating point. In that format 1.0 means
+80 nits, and SDR content is scaled up to your SDR white, for example to 2.5 at slider 30. A
+screenshot tool has to squeeze this into an ordinary 8-bit image:
+- A tool that treats 1.0 as white cuts off everything above 80 nits, so the shot blows out.
+- An 8-bit image has no room above SDR white, so HDR highlights clip to flat white, even in
+  tools that get SDR content right.
+
+SDRFix reads the 16-bit desktop directly, using DXGI desktop duplication. It divides by SDR white
+and re-encodes with the same sRGB curve Windows decoded it with:
+
+- **SDR content comes back pixel-exact.** You get the values the app drew. This was checked
+  with a strip of test colors from black to white.
+- **HDR content is tone-mapped, not clipped.** If the captured area contains anything brighter
+  than SDR white, the highlights roll off smoothly (BT.2390 tone mapping) instead of turning flat
+  white. The indicator then says *HDR tone-mapped*.
+- **Nothing changes on screen.** SDRFix doesn't switch brightness or profiles to take a shot.
+  The gamma profiles aren't part of the capture either: screenshots hold what apps drew, so they
+  look right on anyone else's screen.
+
+| Shortcut | Captures |
+|---|---|
+| `Ctrl` + `Shift` + `2` | The active window (or the display under the pointer, if that's the desktop or taskbar) |
+| `Ctrl` + `Shift` + `3` | Every display, as one image |
+| `Ctrl` + `Shift` + `4` | A region: drag on the frozen screen. **Esc** or right-click cancels. |
+
+The image goes to the clipboard as both a bitmap and a PNG, ready to paste. The mouse pointer
+isn't included. These shortcuts work with HDR off too, as ordinary screenshots. Rotated (portrait)
+displays aren't supported yet.
+
+<p align="center"><img src="docs/images/region-picker.png" width="640" alt="Region picker: the frozen screen dimmed, with the selected area around the SDRFix slider at full brightness and a 474 × 316 size label"></p>
 
 ### Tray menu
 
@@ -261,7 +301,9 @@ README.
 ## Troubleshooting
 
 - **A shortcut doesn't work.** Another app may own it. The NVIDIA App overlay, for example, uses
-  `Alt` + `F1`, `Alt` + `F2` and others. Choose a different shortcut in **Keyboard shortcuts…**.
+  `Alt` + `F1`, `Alt` + `F2` and others. If another screenshot tool such as ShareX is set to
+  `Ctrl` + `Shift` + `2`–`4`, remove those bindings there. Or choose different shortcuts in
+  **Keyboard shortcuts…**.
 - **"HDR is off".** SDRFix only works in HDR mode. Turn HDR on in **Display settings…**.
 - **"Windows is set to 33".** Windows Settings (or another app) set a value between steps. Click
   the status line to snap to the nearest step.

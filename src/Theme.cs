@@ -14,8 +14,9 @@ namespace SdrBrightness
         public const string GlyphWarning = "";
         public const string GlyphError = "";
         public const string GlyphSync = "";
+        public const string GlyphCamera = "";
 
-        const string PersonalizeKey = @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+        const string PersonalizeKey =@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 
         public bool Dark;
         public Color Background, Footer, Divider;
