@@ -261,3 +261,7 @@ README.
   Maassoft and its "Pure Power" SDR transfer function.
 - MHC2 research by [dantmnf](https://github.com/dantmnf/MHC2), which made HDR-mode calibration
   profiles on Windows practical.
+
+## License
+
+[MIT](LICENSE)
