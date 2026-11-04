@@ -1,0 +1,6 @@
+# Build output (release exes are attached to GitHub releases instead)
+obj/
+*.exe
+
+# Personal calibration backups
+backup/
