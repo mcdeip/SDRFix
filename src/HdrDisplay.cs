@@ -15,6 +15,7 @@ namespace SdrBrightness
         public uint SourceId;
         public bool HdrSupported;
         public bool HdrOn;
+        public bool IsMain; // Windows' main display
 
         // The Settings slider runs 0..100 over 80..480 nits; the API counts in 1/1000ths of 80 nits.
         public static int LevelFromSlider(int slider)
@@ -66,6 +67,7 @@ namespace SdrBrightness
             if (err != 0)
                 return list;
 
+            string main = Native.MainDisplayName();
             for (int i = 0; i < pathCount; i++)
             {
                 var path = paths[i];
@@ -96,6 +98,7 @@ namespace SdrBrightness
                 source.header.id = display.SourceId;
                 if (Native.DisplayConfigGetDeviceInfo(ref source) == 0)
                     display.GdiName = source.viewGdiDeviceName;
+                display.IsMain = main != null && string.Equals(display.GdiName, main, StringComparison.OrdinalIgnoreCase);
 
                 display.ReadColorState();
                 list.Add(display);

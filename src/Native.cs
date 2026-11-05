@@ -225,6 +225,56 @@ namespace SdrBrightness
         [DllImport("user32.dll")]
         public static extern uint GetDpiForWindow(IntPtr hWnd);
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINT
+        {
+            public int X, Y;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct MONITORINFOEX
+        {
+            public int cbSize;
+            public RECT rcMonitor, rcWork;
+            public uint dwFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string szDevice;
+        }
+
+        const uint MONITOR_DEFAULTTOPRIMARY = 1, MONITOR_DEFAULTTONEAREST = 2;
+
+        [DllImport("user32.dll")]
+        static extern IntPtr MonitorFromPoint(POINT point, uint flags);
+
+        [DllImport("user32.dll")]
+        static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFOEX info);
+
+        // GDI name (\\.\DISPLAY1) of Windows' main display, the one at the desktop's origin.
+        public static string MainDisplayName()
+        {
+            return MonitorName(MonitorFromPoint(new POINT(), MONITOR_DEFAULTTOPRIMARY));
+        }
+
+        // GDI name of the display showing most of the window.
+        public static string DisplayNameOf(IntPtr hwnd)
+        {
+            return MonitorName(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST));
+        }
+
+        public static string DisplayNameAt(System.Drawing.Point point)
+        {
+            return MonitorName(MonitorFromPoint(new POINT { X = point.X, Y = point.Y }, MONITOR_DEFAULTTONEAREST));
+        }
+
+        static string MonitorName(IntPtr monitor)
+        {
+            var info = new MONITORINFOEX { cbSize = Marshal.SizeOf(typeof(MONITORINFOEX)) };
+            return monitor != IntPtr.Zero && GetMonitorInfo(monitor, ref info) ? info.szDevice : null;
+        }
+
         static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new IntPtr(-4);
 
         [DllImport("user32.dll")]

@@ -14,6 +14,23 @@ using Microsoft.Win32;
 
 namespace SdrBrightness
 {
+    // What SDRFix knows about one display: where Windows has its slider and profile, and changes on their way.
+    sealed class DisplayState
+    {
+        public HdrDisplay Display;
+        public int RawValue = -1;     // Windows' slider position; can be off-step if moved in Settings
+        public string ActiveProfile;  // file name of the default HDR profile
+        public string LastError;
+        public bool HdrWanted;        // the HDR content profile was last asked for, even if Windows hasn't caught up yet
+        public int Seq;
+        public int HotkeyValue = -1;  // where shortcut presses have moved the slider before they commit
+
+        public string Model
+        {
+            get { return Display.ModelId; }
+        }
+    }
+
     sealed class TrayApp : ApplicationContext
     {
         readonly NotifyIcon tray = new NotifyIcon();
@@ -22,16 +39,11 @@ namespace SdrBrightness
         readonly Osd osd = new Osd();
         readonly HotkeyManager hotkeys = new HotkeyManager();
         readonly System.Windows.Forms.Timer hotkeyCommit = new System.Windows.Forms.Timer { Interval = 400 };
+        readonly System.Windows.Forms.Timer displayChange = new System.Windows.Forms.Timer { Interval = 500 };
         readonly Applier applier;
 
-        List<HdrDisplay> displays = new List<HdrDisplay>();
-        HdrDisplay display;
-        int rawValue = -1;     // Windows' slider position; can be off-step if moved in Settings
-        string activeProfile;  // file name of the default HDR profile
-        string lastError;
-        bool hdrWanted;        // the HDR content profile was last asked for, even if Windows hasn't caught up yet
-        int commitSeq;
-        int hotkeyValue = -1;  // where shortcut presses have moved the slider before they commit
+        List<DisplayState> states = new List<DisplayState>(); // every active display, Windows' main display first
+        List<DisplayState> shown = new List<DisplayState>();  // the popup's entries, in order
         IntPtr iconHandle;
         SetupWindow setup;
         ShortcutsWindow shortcuts;
@@ -43,22 +55,37 @@ namespace SdrBrightness
             applier = new Applier(popup);
             applier.Applied += OnApplied;
 
-            popup.Previewed += value =>
+            popup.Previewed += (i, value) =>
             {
-                if (display != null && display.HdrOn)
-                    applier.Submit(new ApplyRequest { Display = display, Value = value });
+                DisplayState s = Shown(i);
+                if (s != null && s.Display.HdrOn)
+                    applier.Submit(new ApplyRequest { Display = s.Display, Value = value });
             };
-            popup.Committed += value => Commit(value, popup.HdrOn);
-            popup.StatusClicked += () => Commit(popup.Value, popup.HdrOn);
-            popup.HdrToggled += on => Commit(popup.Value, on);
-            popup.GammaChanged += gamma =>
+            popup.Committed += (i, value) => Commit(Shown(i), value, popup.HdrOnOf(i));
+            popup.StatusClicked += i => Commit(Shown(i), popup.ValueOf(i), popup.HdrOnOf(i));
+            popup.HdrToggled += (i, on) => Commit(Shown(i), popup.ValueOf(i), on);
+            popup.GammaChanged += (i, gamma) =>
             {
-                Settings.Gamma = gamma;
-                Commit(popup.Value, popup.HdrOn);
+                DisplayState s = Shown(i);
+                if (s == null)
+                    return;
+                Settings.SetGamma(s.Model, gamma);
+                Commit(s, popup.ValueOf(i), popup.HdrOnOf(i));
             };
-            popup.SetupClicked += () => ShowSetup(false);
+            popup.SetupClicked += i => ShowSetup(Shown(i), false);
+            popup.LinkToggled += on =>
+            {
+                Settings.LinkDisplays = on;
+                PushToPopup();
+            };
             hotkeys.Pressed += OnHotkey;
             hotkeyCommit.Tick += delegate { FlushHotkey(); };
+            // Displays come and go, or become the main one, in several steps; look once they've settled.
+            displayChange.Tick += delegate
+            {
+                displayChange.Stop();
+                RefreshState();
+            };
 
             menu.Popup += delegate
             {
@@ -71,6 +98,7 @@ namespace SdrBrightness
             tray.ContextMenu = menu;
             tray.MouseClick += OnTrayClick;
             SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+            SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
 
             RefreshState();
             UpdateTrayIcon();
@@ -78,18 +106,104 @@ namespace SdrBrightness
             hotkeys.Apply();
 
             if (!Settings.SetupOffered)
-                popup.BeginInvoke((Action)delegate { ShowSetup(true); });
+                popup.BeginInvoke((Action)delegate { ShowSetup(Primary, true); });
         }
 
-        string Model
+        // ---- Displays ----
+
+        DisplayState Find(string devicePath)
         {
-            get { return display != null ? display.ModelId : null; }
+            return states.FirstOrDefault(s => s.Display.DevicePath == devicePath);
         }
 
-        int CurrentValue
+        DisplayState Shown(int index)
         {
-            get { return BrightnessPopup.Snap(rawValue >= 0 ? rawValue : popup.Value); }
+            return index >= 0 && index < shown.Count ? shown[index] : null;
         }
+
+        List<DisplayState> HdrStates
+        {
+            get { return states.Where(s => s.Display.HdrOn).ToList(); }
+        }
+
+        // The display to act on when there's no better choice: the main one if HDR is on there.
+        DisplayState Primary
+        {
+            get
+            {
+                return states.FirstOrDefault(s => s.Display.HdrOn)
+                    ?? states.FirstOrDefault(s => s.Display.HdrSupported)
+                    ?? states.FirstOrDefault();
+            }
+        }
+
+        // The display with the active window (the pointer's, when no window has focus).
+        DisplayState Focused()
+        {
+            IntPtr foreground = Native.GetForegroundWindow();
+            string name = foreground != IntPtr.Zero ? Native.DisplayNameOf(foreground) : Native.DisplayNameAt(Cursor.Position);
+            return states.FirstOrDefault(s => string.Equals(s.Display.GdiName, name, StringComparison.OrdinalIgnoreCase)) ?? Primary;
+        }
+
+        int CurrentValue(DisplayState s)
+        {
+            int i = shown.IndexOf(s);
+            return BrightnessPopup.Snap(s.RawValue >= 0 ? s.RawValue : i >= 0 ? popup.ValueOf(i) : 0);
+        }
+
+        // The set a display uses: its own choice, or setup's other gamma when only that one exists for it.
+        static string GammaFor(DisplayState s)
+        {
+            string model = s != null ? s.Model : null;
+            string gamma = Settings.GetGamma(model);
+            if (s != null && !ProfileLibrary.HasGamma(model, gamma))
+                foreach (string other in ProfileGenerator.Gammas)
+                    if (ProfileLibrary.HasGamma(model, other))
+                        return other;
+            return gamma;
+        }
+
+        static bool[] GammaAvailability(DisplayState s)
+        {
+            var available = new bool[ProfileGenerator.Gammas.Length];
+            for (int i = 0; i < available.Length; i++)
+                available[i] = s != null && ProfileLibrary.HasGamma(s.Model, ProfileGenerator.Gammas[i]);
+            return available;
+        }
+
+        // Re-reads displays, brightness and the active profiles from Windows.
+        void RefreshState()
+        {
+            var next = new List<DisplayState>();
+            foreach (HdrDisplay d in HdrDisplay.GetAll().OrderBy(d => d.IsMain ? 0 : 1))
+            {
+                DisplayState s = Find(d.DevicePath) ?? new DisplayState();
+                s.Display = d;
+                s.RawValue = -1;
+                s.LastError = null;
+                int? level = d.GetSdrWhiteLevel();
+                if (level.HasValue)
+                    s.RawValue = Math.Max(0, Math.Min(100, HdrDisplay.SliderFromLevel(level.Value)));
+                s.ActiveProfile = d.GetDefaultProfile();
+                s.HdrWanted = ProfileLibrary.IsHdr(s.ActiveProfile);
+                next.Add(s);
+            }
+            states = next;
+            if (!popup.Interacting)
+                PushToPopup();
+            UpdateTooltip();
+        }
+
+        void OnDisplaySettingsChanged(object sender, EventArgs e)
+        {
+            popup.BeginInvoke((Action)delegate
+            {
+                displayChange.Stop();
+                displayChange.Start();
+            });
+        }
+
+        // ---- Popup ----
 
         // Called from another thread when the exe is launched a second time.
         public void ShowFromSignal()
@@ -119,33 +233,99 @@ namespace SdrBrightness
             popup.ShowNear(anchor);
         }
 
-        void Commit(int value, bool hdr, bool reload = false)
+        // One entry per display with HDR on; with none, the display that would be used, so it can say why.
+        void PushToPopup()
         {
-            if (display == null || !display.HdrOn)
+            shown = HdrStates;
+            if (shown.Count == 0 && Primary != null)
+                shown.Add(Primary);
+            var list = new List<PopupDisplay>();
+            foreach (DisplayState s in shown)
+                list.Add(Describe(s));
+            if (list.Count == 0)
+                list.Add(new PopupDisplay { Enabled = false, Status = "No active display found", StatusKind = StatusKind.Error });
+            popup.SetDisplays(list, states.Count(s => s.Display.HdrSupported) > 1, Settings.ShowGammaToggle, Settings.LinkDisplays);
+        }
+
+        PopupDisplay Describe(DisplayState s)
+        {
+            ColorProfile hdrProfile = ProfileLibrary.HdrFor(s.Model);
+            bool ready = s.Display.HdrOn;
+            bool hdrActive = ProfileLibrary.IsHdr(s.ActiveProfile);
+            int value = CurrentValue(s);
+            var d = new PopupDisplay
+            {
+                Name = s.Display.Name,
+                Value = value,
+                Enabled = ready,
+                HdrOn = hdrActive,
+                HdrAvailable = ready && hdrProfile != null,
+                HdrHint = hdrProfile == null ? "No HDR profile yet · setup creates one"
+                    : hdrProfile.Model != null ? "No gamma curve · 0–" + Math.Round(hdrProfile.PeakNits) + " nits"
+                    : "Applies " + hdrProfile.FileName + " · no gamma curve",
+                Gamma = GammaFor(s),
+                GammaAvailable = GammaAvailability(s),
+            };
+
+            if (!ready)
+                SetStatus(d, "HDR is off on " + s.Display.Name + " · turn it on in Display settings", StatusKind.Info, false);
+            else if (s.LastError != null)
+                SetStatus(d, s.LastError + " · click to retry", StatusKind.Error, true);
+            else if (hdrActive)
+                SetStatus(d, "HDR profile active · the slider only changes brightness", StatusKind.Info, false);
+            else if (s.RawValue >= 0 && s.RawValue % BrightnessPopup.Step != 0)
+                SetStatus(d, "Windows is set to " + s.RawValue + " · click to snap to " + value, StatusKind.Warning, true);
+            else
+            {
+                ColorProfile expected = ProfileLibrary.Find(s.Model, d.Gamma, value);
+                if (expected == null)
+                    SetStatus(d, "No profile for " + value + " · brightness only", StatusKind.Warning, false);
+                else if (string.Equals(s.ActiveProfile, expected.FileName, StringComparison.OrdinalIgnoreCase))
+                    SetStatus(d, expected.Label, StatusKind.Success, false);
+                else
+                    SetStatus(d, "Active profile: " + ProfileLibrary.Describe(s.ActiveProfile) + " · click to fix", StatusKind.Warning, true);
+            }
+            return d;
+        }
+
+        static void SetStatus(PopupDisplay d, string text, StatusKind kind, bool clickable)
+        {
+            d.Status = text;
+            d.StatusKind = kind;
+            d.StatusClickable = clickable;
+        }
+
+        void Commit(DisplayState s, int value, bool hdr, bool reload = false)
+        {
+            if (s == null || !s.Display.HdrOn)
                 return;
-            hdrWanted = hdr;
-            popup.SetStatus("Applying…", StatusKind.Busy, false);
+            s.HdrWanted = hdr;
+            popup.SetStatus(shown.IndexOf(s), "Applying…", StatusKind.Busy, false);
             applier.Submit(new ApplyRequest
             {
-                Display = display,
+                Display = s.Display,
                 Value = value,
                 Final = true,
                 Hdr = hdr,
-                Gamma = Settings.Gamma,
+                Gamma = GammaFor(s),
                 Reload = reload,
-                Seq = ++commitSeq,
+                Seq = ++s.Seq,
             });
         }
 
         void OnApplied(ApplyResult result)
         {
-            rawValue = result.Value;
-            activeProfile = result.ActiveProfile;
-            lastError = result.Error;
-            if (result.Seq == commitSeq)
-                hdrWanted = ProfileLibrary.IsHdr(activeProfile);
+            DisplayState s = Find(result.DevicePath);
+            if (s == null)
+                return; // the display has gone since
+            s.RawValue = result.Value;
+            s.ActiveProfile = result.ActiveProfile;
+            s.LastError = result.Error;
+            if (result.Seq == s.Seq)
+                s.HdrWanted = ProfileLibrary.IsHdr(s.ActiveProfile);
             UpdateTooltip();
-            if (!popup.Interacting && popup.Value == result.Value)
+            int i = shown.IndexOf(s);
+            if (!popup.Interacting && (i < 0 || popup.ValueOf(i) == result.Value))
                 PushToPopup();
         }
 
@@ -158,56 +338,80 @@ namespace SdrBrightness
                 Screenshot(action); // with HDR off too
                 return;
             }
-            if (display == null || !display.HdrOn)
+            if (HdrStates.Count == 0)
                 RefreshState();
-            if (display == null || !display.HdrOn)
+            List<DisplayState> hdr = HdrStates;
+            if (hdr.Count == 0)
             {
-                osd.ShowText(Theme.GlyphWarning, display == null ? "No display found" : "HDR is off on " + display.Name);
+                DisplayState p = Primary;
+                osd.ShowText(Theme.GlyphWarning, p == null ? "No display found" : "HDR is off on " + p.Display.Name);
                 return;
             }
+            bool several = hdr.Count > 1;
+            DisplayState focused = Focused();
+            if (several && !focused.Display.HdrOn && (action == HotkeyAction.ToggleHdr || !Settings.LinkDisplays))
+            {
+                osd.ShowText(Theme.GlyphWarning, "HDR is off on " + focused.Display.Name, focused.Display.GdiName);
+                return;
+            }
+            if (!several)
+                focused = hdr[0];
 
             if (action == HotkeyAction.ToggleHdr)
             {
+                // Always the active window's display: it's about what's showing there.
                 FlushHotkey();
-                if (ProfileLibrary.HdrFor(Model) == null)
+                string on = several ? " · " + focused.Display.Name : "";
+                if (ProfileLibrary.HdrFor(focused.Model) == null)
                 {
-                    osd.ShowText(Theme.GlyphWarning, "No HDR profile · run setup from the tray menu");
+                    osd.ShowText(Theme.GlyphWarning, "No HDR profile" + on + " · run setup from the tray menu", focused.Display.GdiName);
                     return;
                 }
-                bool on = !hdrWanted;
-                Commit(CurrentValue, on);
-                osd.ShowText(Theme.GlyphBrightness, on ? "HDR content profile on" : "HDR content profile off · gamma " + Settings.Gamma);
+                bool hdrOn = !focused.HdrWanted;
+                Commit(focused, CurrentValue(focused), hdrOn);
+                osd.ShowText(Theme.GlyphBrightness,
+                    (hdrOn ? "HDR content profile on" : "HDR content profile off · gamma " + GammaFor(focused)) + on, focused.Display.GdiName);
                 if (popup.Visible && !popup.Interacting)
                     PushToPopup();
                 return;
             }
 
+            // Linked displays all move; otherwise just the active window's.
+            List<DisplayState> targets = several && Settings.LinkDisplays ? hdr : new List<DisplayState> { focused };
+            if (!targets.Contains(focused))
+                focused = targets[0];
             int step = Settings.HotkeyStep * (action == HotkeyAction.BrightnessUp ? 1 : -1);
-            int next = BrightnessPopup.Snap((hotkeyValue >= 0 ? hotkeyValue : CurrentValue) + step);
-            hotkeyValue = next;
-            applier.Submit(new ApplyRequest { Display = display, Value = next }); // brightness now, profile once presses stop
+            foreach (DisplayState s in targets)
+            {
+                s.HotkeyValue = BrightnessPopup.Snap((s.HotkeyValue >= 0 ? s.HotkeyValue : CurrentValue(s)) + step);
+                applier.Submit(new ApplyRequest { Display = s.Display, Value = s.HotkeyValue }); // brightness now, profile once presses stop
+            }
             hotkeyCommit.Stop();
             hotkeyCommit.Start();
             if (popup.Visible)
             {
                 if (!popup.Interacting)
                 {
-                    rawValue = next;
+                    foreach (DisplayState s in targets)
+                        s.RawValue = s.HotkeyValue;
                     PushToPopup();
                 }
             }
             else
-                osd.ShowLevel(next);
+                osd.ShowLevel(focused.HotkeyValue, focused.Display.GdiName);
         }
 
         void FlushHotkey()
         {
             hotkeyCommit.Stop();
-            if (hotkeyValue < 0)
-                return;
-            int value = hotkeyValue;
-            hotkeyValue = -1;
-            Commit(value, hdrWanted);
+            foreach (DisplayState s in states)
+            {
+                if (s.HotkeyValue < 0)
+                    continue;
+                int value = s.HotkeyValue;
+                s.HotkeyValue = -1;
+                Commit(s, value, s.HdrWanted);
+            }
         }
 
         // ---- Screenshots ----
@@ -331,7 +535,7 @@ namespace SdrBrightness
 
         // ---- Windows ----
 
-        void ShowSetup(bool firstRun)
+        void ShowSetup(DisplayState target, bool firstRun)
         {
             Settings.SetupOffered = true;
             if (setup != null)
@@ -340,28 +544,35 @@ namespace SdrBrightness
                 return;
             }
             popup.HidePopup();
+            string path = target != null ? target.Display.DevicePath : null;
             RefreshState();
-            setup = new SetupWindow(display, Settings.Gamma, SuggestedPeak(), firstRun);
-            setup.ProfilesCreated += OnProfilesCreated;
+            DisplayState s = (path != null ? Find(path) : null) ?? Primary;
+            path = s != null ? s.Display.DevicePath : null;
+            setup = new SetupWindow(s != null ? s.Display : null, GammaFor(s), SuggestedPeak(s), firstRun);
+            setup.ProfilesCreated += gamma => OnProfilesCreated(path, gamma);
             setup.FormClosed += delegate { setup = null; };
             setup.Show();
             setup.Activate();
         }
 
-        // The peak the current profiles already declare, so a re-run starts from it.
-        int SuggestedPeak()
+        // The peak the display's current profiles already declare, so a re-run starts from it.
+        static int SuggestedPeak(DisplayState s)
         {
-            foreach (ColorProfile profile in new[] { ProfileLibrary.Get(activeProfile), ProfileLibrary.HdrFor(Model) })
-                if (profile != null && profile.PeakNits >= 100 && profile.PeakNits <= 10000)
-                    return (int)Math.Round(profile.PeakNits);
+            if (s != null)
+                foreach (ColorProfile profile in new[] { ProfileLibrary.Get(s.ActiveProfile), ProfileLibrary.HdrFor(s.Model) })
+                    if (profile != null && profile.PeakNits >= 100 && profile.PeakNits <= 10000)
+                        return (int)Math.Round(profile.PeakNits);
             return 1000;
         }
 
-        void OnProfilesCreated(string gamma)
+        void OnProfilesCreated(string path, string gamma)
         {
-            Settings.Gamma = gamma;
+            DisplayState s = Find(path);
+            Settings.SetGamma(s != null ? s.Model : null, gamma);
             RefreshState();
-            Commit(CurrentValue, hdrWanted, true);
+            s = Find(path);
+            if (s != null)
+                Commit(s, CurrentValue(s), s.HdrWanted, true);
             // After the setup window has closed, so closing it doesn't dismiss the slider.
             popup.BeginInvoke((Action)ShowPopupAtTray);
         }
@@ -381,100 +592,72 @@ namespace SdrBrightness
             shortcuts.Activate();
         }
 
-        // Re-reads displays, brightness and the active profile from Windows.
-        void RefreshState()
-        {
-            displays = HdrDisplay.GetAll();
-            string saved = Settings.Display;
-            display = displays.FirstOrDefault(d => d.DevicePath == saved)
-                ?? displays.FirstOrDefault(d => d.HdrOn)
-                ?? displays.FirstOrDefault(d => d.HdrSupported)
-                ?? displays.FirstOrDefault();
-
-            rawValue = -1;
-            activeProfile = null;
-            lastError = null;
-            if (display != null)
-            {
-                int? level = display.GetSdrWhiteLevel();
-                if (level.HasValue)
-                    rawValue = Math.Max(0, Math.Min(100, HdrDisplay.SliderFromLevel(level.Value)));
-                activeProfile = display.GetDefaultProfile();
-            }
-            hdrWanted = ProfileLibrary.IsHdr(activeProfile);
-            if (!popup.Interacting)
-                PushToPopup();
-            UpdateTooltip();
-        }
-
-        bool[] GammaAvailability()
-        {
-            var available = new bool[ProfileGenerator.Gammas.Length];
-            for (int i = 0; i < available.Length; i++)
-                available[i] = display != null && ProfileLibrary.HasGamma(Model, ProfileGenerator.Gammas[i]);
-            return available;
-        }
-
-        void PushToPopup()
-        {
-            ColorProfile hdrProfile = ProfileLibrary.HdrFor(Model);
-            bool ready = display != null && display.HdrOn;
-            bool hdrActive = ProfileLibrary.IsHdr(activeProfile);
-            string gamma = Settings.Gamma;
-            string hint = hdrProfile == null ? "No HDR profile yet · setup creates one"
-                : hdrProfile.Model != null ? "No gamma curve · 0–" + Math.Round(hdrProfile.PeakNits) + " nits"
-                : "Applies " + hdrProfile.FileName + " · no gamma curve";
-            string name = displays.Count(d => d.HdrSupported) > 1 && display != null ? display.Name : null;
-            popup.SetState(rawValue >= 0 ? rawValue : popup.Value, ready, hdrActive, ready && hdrProfile != null, hint, name);
-            popup.SetGamma(gamma, GammaAvailability(), Settings.ShowGammaToggle);
-
-            if (display == null)
-                popup.SetStatus("No active display found", StatusKind.Error, false);
-            else if (!display.HdrOn)
-                popup.SetStatus("HDR is off on " + display.Name + " · turn it on in Display settings", StatusKind.Info, false);
-            else if (lastError != null)
-                popup.SetStatus(lastError + " · click to retry", StatusKind.Error, true);
-            else if (hdrActive)
-                popup.SetStatus("HDR profile active · the slider only changes brightness", StatusKind.Info, false);
-            else if (rawValue >= 0 && rawValue % BrightnessPopup.Step != 0)
-                popup.SetStatus("Windows is set to " + rawValue + " · click to snap to " + popup.Value, StatusKind.Warning, true);
-            else
-            {
-                ColorProfile expected = ProfileLibrary.Find(Model, gamma, popup.Value);
-                if (expected == null)
-                    popup.SetStatus("No profile for " + popup.Value + " · brightness only", StatusKind.Warning, false);
-                else if (string.Equals(activeProfile, expected.FileName, StringComparison.OrdinalIgnoreCase))
-                    popup.SetStatus(expected.Label, StatusKind.Success, false);
-                else
-                    popup.SetStatus("Active profile: " + ProfileLibrary.Describe(activeProfile) + " · click to fix",
-                        StatusKind.Warning, true);
-            }
-        }
-
         void BuildMenu()
         {
             menu.MenuItems.Clear();
-            bool ready = display != null && display.HdrOn;
-            bool hdrActive = ProfileLibrary.IsHdr(activeProfile);
-            string gamma = Settings.Gamma;
-
             menu.MenuItems.Add(new MenuItem("Open slider", delegate { ShowPopup(Cursor.Position); }) { DefaultItem = true });
 
-            var levels = new MenuItem("SDR brightness" + (rawValue >= 0 ? "  (" + rawValue + ")" : "")) { Enabled = ready };
+            // One HDR display: its items right here. Several: a submenu each, plus linking.
+            List<DisplayState> supported = states.Where(s => s.Display.HdrSupported).ToList();
+            if (supported.Count <= 1)
+                menu.MenuItems.AddRange(DisplayItems(Primary));
+            else
+            {
+                foreach (DisplayState s in supported)
+                {
+                    var sub = new MenuItem(s.Display.Name + (s.Display.HdrOn ? "" : "  (HDR off)"));
+                    sub.MenuItems.AddRange(DisplayItems(s));
+                    sub.MenuItems.Add("-");
+                    sub.MenuItems.Add("Set up gamma profiles…", delegate { ShowSetup(s, false); });
+                    menu.MenuItems.Add(sub);
+                }
+                menu.MenuItems.Add(new MenuItem("Link displays", delegate
+                {
+                    Settings.LinkDisplays = !Settings.LinkDisplays;
+                    PushToPopup();
+                })
+                {
+                    Checked = Settings.LinkDisplays,
+                });
+            }
+
+            menu.MenuItems.Add("-");
+            if (supported.Count <= 1)
+                menu.MenuItems.Add("Set up gamma profiles…", delegate { ShowSetup(Primary, false); });
+            menu.MenuItems.Add("Keyboard shortcuts…" + (hotkeys.Failed.Count > 0 ? "  (" + hotkeys.Failed.Count + " unavailable)" : ""),
+                delegate { ShowShortcuts(); });
+            menu.MenuItems.Add("Open screenshot folder", delegate { OpenScreenshotFolder(); });
+            menu.MenuItems.Add("Display settings…", delegate { Process.Start("ms-settings:display"); });
+            menu.MenuItems.Add(new MenuItem("Start with Windows", delegate { Settings.StartWithWindows = !Settings.StartWithWindows; })
+            {
+                Checked = Settings.StartWithWindows,
+            });
+            menu.MenuItems.Add("-");
+            menu.MenuItems.Add("Exit", delegate { ExitThread(); });
+        }
+
+        // SDR brightness steps, the gamma choice and the HDR content profile for one display.
+        MenuItem[] DisplayItems(DisplayState s)
+        {
+            bool ready = s != null && s.Display.HdrOn;
+            bool hdrActive = s != null && ProfileLibrary.IsHdr(s.ActiveProfile);
+            string model = s != null ? s.Model : null;
+            string gamma = GammaFor(s);
+
+            var levels = new MenuItem("SDR brightness" + (s != null && s.RawValue >= 0 ? "  (" + s.RawValue + ")" : "")) { Enabled = ready };
             for (int v = BrightnessPopup.Min; v <= BrightnessPopup.Max; v += BrightnessPopup.Step)
             {
                 int value = v;
                 string text = v + "  ·  " + HdrDisplay.NitsFromSlider(v) + " nits"
-                    + (ProfileLibrary.Find(Model, gamma, v) == null ? "   (no profile)" : "");
-                levels.MenuItems.Add(new MenuItem(text, delegate { Commit(value, hdrWanted); })
+                    + (ProfileLibrary.Find(model, gamma, v) == null ? "   (no profile)" : "");
+                levels.MenuItems.Add(new MenuItem(text, delegate { Commit(s, value, s.HdrWanted); })
                 {
                     RadioCheck = true,
-                    Checked = v == rawValue,
+                    Checked = s != null && v == s.RawValue,
                 });
             }
-            menu.MenuItems.Add(levels);
 
-            bool[] available = GammaAvailability();
+            bool[] available = GammaAvailability(s);
             var gammas = new MenuItem("Gamma  (" + gamma + ")");
             gammas.MenuItems.Add(new MenuItem("Show toggle in slider", delegate
             {
@@ -490,8 +673,8 @@ namespace SdrBrightness
                 string choice = ProfileGenerator.Gammas[i];
                 gammas.MenuItems.Add(new MenuItem(choice + (available[i] ? "" : "   (run setup)"), delegate
                 {
-                    Settings.Gamma = choice;
-                    Commit(CurrentValue, hdrWanted);
+                    Settings.SetGamma(model, choice);
+                    Commit(s, CurrentValue(s), s.HdrWanted);
                 })
                 {
                     RadioCheck = true,
@@ -499,68 +682,39 @@ namespace SdrBrightness
                     Enabled = available[i],
                 });
             }
-            menu.MenuItems.Add(gammas);
 
-            ColorProfile hdrProfile = ProfileLibrary.HdrFor(Model);
+            ColorProfile hdrProfile = ProfileLibrary.HdrFor(model);
             string hdrKey = Settings.GetHotkey(HotkeyAction.ToggleHdr).IsEmpty ? "" : "\t" + Settings.GetHotkey(HotkeyAction.ToggleHdr);
-            menu.MenuItems.Add(new MenuItem("HDR content profile" + (hdrProfile != null && hdrProfile.Model == null ? "  (" + hdrProfile.FileName + ")" : "") + hdrKey,
-                delegate { Commit(CurrentValue, !hdrActive); })
+            var hdr = new MenuItem("HDR content profile" + (hdrProfile != null && hdrProfile.Model == null ? "  (" + hdrProfile.FileName + ")" : "") + hdrKey,
+                delegate { Commit(s, CurrentValue(s), !hdrActive); })
             {
                 Checked = hdrActive,
                 Enabled = ready && hdrProfile != null,
-            });
-
-            if (displays.Count > 1)
-            {
-                var choose = new MenuItem("Display");
-                foreach (HdrDisplay d in displays)
-                {
-                    HdrDisplay target = d;
-                    string state = d.HdrOn ? "" : d.HdrSupported ? "  (HDR off)" : "  (no HDR)";
-                    choose.MenuItems.Add(new MenuItem(d.Name + state, delegate
-                    {
-                        Settings.Display = target.DevicePath;
-                        RefreshState();
-                    })
-                    {
-                        RadioCheck = true,
-                        Checked = display != null && d.DevicePath == display.DevicePath,
-                    });
-                }
-                menu.MenuItems.Add(choose);
-            }
-
-            menu.MenuItems.Add("-");
-            menu.MenuItems.Add("Set up gamma profiles…", delegate { ShowSetup(false); });
-            menu.MenuItems.Add("Keyboard shortcuts…" + (hotkeys.Failed.Count > 0 ? "  (" + hotkeys.Failed.Count + " unavailable)" : ""),
-                delegate { ShowShortcuts(); });
-            menu.MenuItems.Add("Open screenshot folder", delegate { OpenScreenshotFolder(); });
-            menu.MenuItems.Add("Display settings…", delegate { Process.Start("ms-settings:display"); });
-            menu.MenuItems.Add(new MenuItem("Start with Windows", delegate { Settings.StartWithWindows = !Settings.StartWithWindows; })
-            {
-                Checked = Settings.StartWithWindows,
-            });
-            menu.MenuItems.Add("-");
-            menu.MenuItems.Add("Exit", delegate { ExitThread(); });
+            };
+            return new[] { levels, gammas, hdr };
         }
 
         void UpdateTooltip()
         {
+            List<DisplayState> hdr = HdrStates;
             string text;
-            if (display == null)
+            if (states.Count == 0)
                 text = "SDR brightness · no display";
-            else if (!display.HdrOn)
+            else if (hdr.Count == 0)
                 text = "SDR brightness · HDR is off";
+            else if (hdr.Count > 1)
+                text = "SDR brightness · " + string.Join(" · ", hdr.Select(s => s.Display.Name + " " + (s.RawValue >= 0 ? s.RawValue.ToString() : "?")).ToArray());
             else
             {
-                text = "SDR brightness " + (rawValue >= 0 ? rawValue + " (" + HdrDisplay.NitsFromSlider(rawValue) + " nits)" : "?");
-                ColorProfile profile = ProfileLibrary.Get(activeProfile);
+                DisplayState s = hdr[0];
+                text = "SDR brightness " + (s.RawValue >= 0 ? s.RawValue + " (" + HdrDisplay.NitsFromSlider(s.RawValue) + " nits)" : "?");
+                ColorProfile profile = ProfileLibrary.Get(s.ActiveProfile);
                 if (profile != null && profile.Gamma != null)
                     text += " · gamma " + profile.Gamma;
                 else if (profile != null && profile.IsHdr)
                     text += " · HDR profile";
-                else if (activeProfile != null)
-                    text += " · " + activeProfile;
+                else if (s.ActiveProfile != null)
+                    text += " · " + s.ActiveProfile;
             }
             tray.Text = text.Length > 63 ? text.Substring(0, 63) : text;
         }
@@ -591,9 +745,11 @@ namespace SdrBrightness
         protected override void ExitThreadCore()
         {
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+            SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             FlushHotkey();
             hotkeys.Dispose();
             hotkeyCommit.Dispose();
+            displayChange.Dispose();
             tray.Visible = false;
             tray.Dispose();
             menu.Dispose();

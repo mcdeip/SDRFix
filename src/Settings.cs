@@ -11,36 +11,43 @@ namespace SdrBrightness
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         const string RunValue = "SdrBrightness";
 
-        // Monitor device path of the display to control when more than one is connected.
-        public static string Display
+        // Which of setup's profile sets a display uses, "2.2" or "2.4". Each display model keeps its own
+        // choice; one that hasn't made any yet starts from the last choice made on any display.
+        public static string GetGamma(string model)
         {
-            get
+            using (var key = Registry.CurrentUser.OpenSubKey(Key))
             {
-                using (var key = Registry.CurrentUser.OpenSubKey(Key))
-                    return key == null ? null : key.GetValue("Display") as string;
-            }
-            set
-            {
-                using (var key = Registry.CurrentUser.CreateSubKey(Key))
-                    key.SetValue("Display", value ?? "");
+                string value = key == null ? null : (key.GetValue("Gamma-" + model) as string ?? key.GetValue("Gamma") as string);
+                return Array.IndexOf(ProfileGenerator.Gammas, value) >= 0 ? value : ProfileGenerator.Gammas[0];
             }
         }
 
-        // Which of setup's profile sets the slider uses: "2.2" or "2.4".
-        public static string Gamma
+        public static void SetGamma(string model, string gamma)
+        {
+            using (var key = Registry.CurrentUser.CreateSubKey(Key))
+            {
+                key.SetValue("Gamma", gamma);
+                if (!string.IsNullOrEmpty(model))
+                    key.SetValue("Gamma-" + model, gamma);
+            }
+        }
+
+        // With several HDR displays: whether their sliders move together, and the brightness shortcuts change
+        // all of them rather than just the display with the active window.
+        public static bool LinkDisplays
         {
             get
             {
                 using (var key = Registry.CurrentUser.OpenSubKey(Key))
                 {
-                    string value = key == null ? null : key.GetValue("Gamma") as string;
-                    return Array.IndexOf(ProfileGenerator.Gammas, value) >= 0 ? value : ProfileGenerator.Gammas[0];
+                    object value = key == null ? null : key.GetValue("LinkDisplays");
+                    return !(value is int) || (int)value != 0;
                 }
             }
             set
             {
                 using (var key = Registry.CurrentUser.CreateSubKey(Key))
-                    key.SetValue("Gamma", value);
+                    key.SetValue("LinkDisplays", value ? 1 : 0, RegistryValueKind.DWord);
             }
         }
 

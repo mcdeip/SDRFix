@@ -57,26 +57,32 @@ namespace SdrBrightness
             Native.DwmSetWindowAttribute(Handle, Native.DWMWA_WINDOW_CORNER_PREFERENCE, ref round, sizeof(int));
         }
 
-        public void ShowLevel(int value)
+        // `display` is the GDI name of the screen to show on; the one with the cursor when null.
+        public void ShowLevel(int value, string display = null)
         {
             this.value = value;
-            Present();
+            Present(display);
         }
 
-        public void ShowText(string glyph, string text)
+        public void ShowText(string glyph, string text, string display = null)
         {
             value = -1;
             this.glyph = glyph;
             this.text = text;
-            Present();
+            Present(display);
         }
 
-        // Bottom center of the screen the cursor is on, above the taskbar.
-        void Present()
+        // Bottom center of the screen, above the taskbar.
+        void Present(string display)
         {
             theme = Theme.Current();
             UpdateScale();
-            Rectangle work = Screen.FromPoint(Cursor.Position).WorkingArea;
+            Screen screen = Screen.FromPoint(Cursor.Position);
+            if (display != null)
+                foreach (Screen s in Screen.AllScreens)
+                    if (string.Equals(s.DeviceName, display, StringComparison.OrdinalIgnoreCase))
+                        screen = s;
+            Rectangle work = screen.WorkingArea;
             int w = S(WidthDip), h = S(HeightDip);
             if (value < 0) // messages get as wide as they need, within reason
                 w = Math.Min(S(560), Math.Max(w, TextRenderer.MeasureText(text, textFont).Width + S(2 * Pad + 30)));

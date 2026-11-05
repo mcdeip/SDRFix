@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -17,6 +18,7 @@ namespace SdrBrightness
 
     sealed class ApplyResult
     {
+        public string DevicePath; // which display
         public int Value;
         public string ActiveProfile;
         public string Error;
@@ -24,13 +26,13 @@ namespace SdrBrightness
     }
 
     // Talks to Windows on a background thread so the slider never stalls.
-    // Requests that pile up while one is running collapse into the newest.
+    // Requests that pile up for a display while one is running collapse into its newest.
     sealed class Applier
     {
         readonly Control ui;
         readonly object gate = new object();
         readonly AutoResetEvent wake = new AutoResetEvent(false);
-        ApplyRequest pending;
+        readonly List<ApplyRequest> pending = new List<ApplyRequest>(); // at most one per display, oldest first
 
         public event Action<ApplyResult> Applied;
 
@@ -44,10 +46,15 @@ namespace SdrBrightness
         {
             lock (gate)
             {
-                // A newer request replaces an unstarted one, but must not lose its reload.
-                if (pending != null && pending.Reload)
-                    request.Reload = true;
-                pending = request;
+                // A newer request replaces an unstarted one for the same display, but must not lose its reload.
+                int i = pending.FindIndex(p => p.Display.DevicePath == request.Display.DevicePath);
+                if (i >= 0)
+                {
+                    if (pending[i].Reload)
+                        request.Reload = true;
+                    pending.RemoveAt(i);
+                }
+                pending.Add(request);
             }
             wake.Set();
         }
@@ -56,15 +63,18 @@ namespace SdrBrightness
         {
             while (true)
             {
-                wake.WaitOne();
                 ApplyRequest request;
                 lock (gate)
                 {
-                    request = pending;
-                    pending = null;
+                    request = pending.Count > 0 ? pending[0] : null;
+                    if (request != null)
+                        pending.RemoveAt(0);
                 }
                 if (request == null)
+                {
+                    wake.WaitOne();
                     continue;
+                }
 
                 ApplyResult result;
                 try
@@ -75,6 +85,8 @@ namespace SdrBrightness
                 {
                     result = request.Final ? new ApplyResult { Value = request.Value, Error = ex.Message, Seq = request.Seq } : null;
                 }
+                if (result != null)
+                    result.DevicePath = request.Display.DevicePath;
                 if (result == null)
                     continue;
 

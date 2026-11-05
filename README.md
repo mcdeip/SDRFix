@@ -114,7 +114,8 @@ as soon as you let go.
 
 Choose the curve in the slider, press **G** while the slider is open, or use **Gamma** in the
 tray menu. Use **2.2** for most PC content and a lit room, and **2.4** for films in a dark room.
-Both sets are created by setup, so switching is instant.
+Both sets are created by setup, so switching is instant. With [several displays](#several-displays),
+each one keeps its own choice.
 
 If you never switch, hide the toggle with *Gamma → Show toggle in slider* in the tray menu:
 
@@ -138,8 +139,10 @@ profile from the Windows HDR Calibration app.
 
 ### Setup
 
-Setup runs on first launch, and you can run it again any time from **Set up gamma profiles…**
-in the tray menu. Pick the gamma to start with and enter your display's peak HDR brightness.
+Setup runs on first launch for your main display, and you can run it again any time from
+**Set up gamma profiles…** in the tray menu. With several displays, each one has its own
+**Set up gamma profiles…** in its tray submenu. Pick the gamma to start with and enter your
+display's peak HDR brightness.
 Setup then creates all 43 profiles in a second or two: 21 steps × 2 gammas, plus the HDR
 profile. Running it again (say, with a different peak) overwrites them in place, and SDRFix
 re-applies the active one.
@@ -148,6 +151,26 @@ re-applies the active one.
 
 For the peak, use your display's real HDR peak, for example from a review, your display's
 specifications, or the Windows HDR Calibration app.
+
+### Several displays
+
+When more than one display has HDR on, the slider has a section for each, with the main display
+first. Each display has its own brightness, gamma and HDR content profile, and its own profiles
+from setup with its own peak. A display with HDR off gets no slider and is left alone. SDRFix
+notices when displays are connected or unplugged, or when HDR is turned on or off.
+
+<p align="center"><img src="docs/images/slider-two.png" width="360" alt="The slider with two displays: DELL AW3225QF at 30 (200 nits, gamma 2.2) and LG TV SSCR2 at 15 (140 nits, gamma 2.4), with Link displays on"></p>
+
+- **Link displays** moves the sliders together, and it's on by default. Each display keeps its own
+  level: dragging one from 30 to 40 moves another from 15 to 25. A display that reaches 0 or 100
+  stops there. Press **L** in the slider, or use **Link displays** in the tray menu, to turn it
+  off and set each display on its own.
+- **Brightness shortcuts** move every display while they're linked. Unlinked, they change only
+  the display with the active window, and the indicator shows up on that display.
+- **The HDR content shortcut** always switches the display with the active window, since that's
+  where the HDR game or video is.
+- In the slider, the mouse wheel and the keys (**G** and **Space** too) act on the display
+  under the pointer.
 
 ### Keyboard shortcuts
 
@@ -163,6 +186,7 @@ in any app:
 | Screenshot of the whole desktop | `Ctrl` + `Shift` + `3` |
 | Screenshot of a region | `Ctrl` + `Shift` + `4` |
 
+With several HDR displays, see [Several displays](#several-displays) for which one they change.
 To change them, open **Keyboard shortcuts…** in the tray menu, click a shortcut and press the new
 keys. **Backspace** clears a shortcut. Keys that type something (letters, digits, arrows) need at
 least one modifier, but function keys and media keys can be used alone. **Step per press** sets
@@ -179,7 +203,7 @@ Global shortcuts also take priority over apps' own. For example, while SDRFix ho
 
 ### On-screen indicator
 
-Shortcut presses show a small indicator at the bottom of the screen, like Windows' volume
+Shortcut presses show a small indicator at the bottom of the display, like Windows' volume
 flyout. It never takes focus and lets clicks pass through, so your game keeps running
 undisturbed. Quick repeated presses are combined, so the profile is applied once when you stop.
 
@@ -230,15 +254,17 @@ Right-click the tray icon:
 | **SDR brightness** | Every step with its nits value, for example *30 · 200 nits*. Steps without a profile are marked. |
 | **Gamma** | *Show toggle in slider*, plus 2.2 and 2.4 |
 | **HDR content profile** | On/off, with its shortcut |
-| **Display** | Shown only with more than one display. Picks which one SDRFix controls, and marks displays with HDR off or without HDR. |
 | **Set up gamma profiles…** | Runs setup again |
+| ***Display name*** | Shown instead of the four items above when more than one display supports HDR: a submenu per display with its own brightness, gamma, HDR content profile and setup. Displays with HDR off are marked. |
+| **Link displays** | Shown with more than one HDR display. Moves the sliders and brightness shortcuts together. |
 | **Keyboard shortcuts…** | Changes the shortcuts, the step per press and the screenshot folder |
 | **Open screenshot folder** | Opens the folder screenshots are saved to |
 | **Display settings…** | Opens Windows' display settings (turn HDR on there) |
 | **Start with Windows** | Starts SDRFix when you sign in |
 | **Exit** | Quits. The current brightness and profile stay as they are. |
 
-The tray tooltip shows the current state, for example *SDR brightness 30 (200 nits) · gamma 2.2*.
+The tray tooltip shows the current state, for example *SDR brightness 30 (200 nits) · gamma 2.2*,
+or each display's level when there are several.
 SDRFix follows Windows' light or dark theme.
 
 ### Works with your own profiles too
@@ -277,7 +303,7 @@ The exe isn't code-signed, so SmartScreen may warn the first time you run it. Ch
 
 - **Profiles:** `C:\Windows\System32\spool\drivers\color\SdrBrightness-<display model>-<gamma>-<step>.icm`,
   plus `SdrBrightness-<display model>-HDR.icm`. Profiles are named per display model, so each
-  display gets its own set.
+  display gets its own set. Two displays of the same model share one.
 - **Screenshots:** `Documents\SDRFix Screenshots`, unless you choose another folder
 - **Settings:** `HKEY_CURRENT_USER\Software\SdrBrightness`
 - **Start with Windows:** the `SdrBrightness` value under
